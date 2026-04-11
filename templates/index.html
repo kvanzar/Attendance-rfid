@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Face Attendance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-50 text-gray-800 font-sans antialiased">
+
+    <div class="max-w-5xl mx-auto px-4 py-10">
+        <header class="flex justify-between items-center mb-10 border-b pb-4">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Shield Attendance</h1>
+                <p class="text-sm text-gray-500 mt-1">ESP32 + AI Face Recognition</p>
+            </div>
+            <div class="flex items-center space-x-3">
+                <span class="relative flex h-3 w-3">
+                    <span id="ping-indicator"
+                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                    <span id="dot-indicator" class="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                </span>
+                <span id="status-text" class="text-sm font-semibold text-gray-700 tracking-wide">Connecting...</span>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+            <div class="col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div class="bg-gray-100 px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500">Live Camera Feed</h2>
+                </div>
+                <div class="relative w-full aspect-video bg-gray-900 flex items-center justify-center">
+                    <img id="video-stream" src="" class="hidden w-full h-full object-cover">
+                    <div id="idle-state" class="text-center text-gray-400">
+                        <svg class="mx-auto h-12 w-12 mb-3 opacity-50" fill="none" stroke="currentColor"
+                            viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z">
+                            </path>
+                        </svg>
+                        <p>Camera is offline.</p>
+                        <p class="text-sm mt-1">Tap RFID to start session.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-4">Current Session</h2>
+                    <ul id="attendee-list" class="space-y-2">
+                        <li class="text-gray-400 text-sm italic">No faces detected yet...</li>
+                    </ul>
+                </div>
+
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-500 mb-4">Reports</h2>
+                    <a id="download-btn" href="/download"
+                        class="pointer-events-none opacity-50 inline-block w-full bg-black text-white font-medium py-3 px-4 rounded-xl transition-all duration-200 hover:bg-gray-800">
+                        Download Excel Log
+                    </a>
+                    <p id="download-hint" class="text-xs text-gray-400 mt-3">Available after session ends.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const statusText = document.getElementById('status-text');
+        const dotIndicator = document.getElementById('dot-indicator');
+        const pingIndicator = document.getElementById('ping-indicator');
+        const videoStream = document.getElementById('video-stream');
+        const idleState = document.getElementById('idle-state');
+        const attendeeList = document.getElementById('attendee-list');
+        const downloadBtn = document.getElementById('download-btn');
+        const downloadHint = document.getElementById('download-hint');
+
+        // Poll the server every 1 second to update the UI
+        setInterval(async () => {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                // Update Status Text
+                statusText.innerText = data.state;
+
+                // Handle UI colors based on state
+                if (data.is_recording) {
+                    dotIndicator.className = "relative inline-flex rounded-full h-3 w-3 bg-red-500";
+                    pingIndicator.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75";
+
+                    // Show video, hide idle text
+                    videoStream.src = "/video_feed?" + new Date().getTime(); // Prevent caching
+                    videoStream.classList.remove('hidden');
+                    idleState.classList.add('hidden');
+                } else {
+                    dotIndicator.className = "relative inline-flex rounded-full h-3 w-3 bg-blue-500";
+                    pingIndicator.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75";
+
+                    // Hide video, show idle text
+                    videoStream.src = "";
+                    videoStream.classList.add('hidden');
+                    idleState.classList.remove('hidden');
+                }
+
+                // Update Attendees List
+                if (data.attendees.length > 0) {
+                    attendeeList.innerHTML = data.attendees.map(name =>
+                        `<li class="flex items-center space-x-2">
+                            <span class="h-2 w-2 bg-green-400 rounded-full"></span>
+                            <span class="text-gray-700 font-medium">${name}</span>
+                        </li>`
+                    ).join('');
+                } else if (data.is_recording) {
+                    attendeeList.innerHTML = `<li class="text-gray-400 text-sm italic">Scanning...</li>`;
+                } else {
+                    attendeeList.innerHTML = `<li class="text-gray-400 text-sm italic">Waiting for session...</li>`;
+                }
+
+                // Handle Download Button
+                if (data.file_ready && !data.is_recording) {
+                    downloadBtn.classList.remove('pointer-events-none', 'opacity-50');
+                    downloadHint.innerText = "Latest report ready to download.";
+                    downloadHint.classList.replace('text-gray-400', 'text-green-600');
+                } else {
+                    downloadBtn.classList.add('pointer-events-none', 'opacity-50');
+                    downloadHint.innerText = data.is_recording ? "Session in progress..." : "Available after session ends.";
+                    downloadHint.classList.replace('text-green-600', 'text-gray-400');
+                }
+
+            } catch (error) {
+                console.error("Connection lost", error);
+                statusText.innerText = "Disconnected";
+                dotIndicator.className = "relative inline-flex rounded-full h-3 w-3 bg-gray-500";
+                pingIndicator.classList.add('hidden');
+            }
+        }, 1000);
+    </script>
+</body>
+
+</html>
