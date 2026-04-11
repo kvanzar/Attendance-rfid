@@ -42,6 +42,9 @@ def hardware_loop():
     known_encodings, known_names = load_known_faces()
     MAC_SERIAL_PORT = '/dev/cu.usbserial-0001' # Update if your port changes
     
+    # Variable to hold the start time of the session
+    session_start_time = ""
+    
     try:
         ser = serial.Serial(MAC_SERIAL_PORT, 115200, timeout=1)
         print(f"Connected to ESP32 on {MAC_SERIAL_PORT}")
@@ -60,6 +63,10 @@ def hardware_loop():
                 system_state = "RECORDING (Session Active)"
                 current_attendees.clear()
                 face_match_counts.clear()
+                
+                # Capture the exact time the RFID was tapped to START the session
+                session_start_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
                 cap = cv2.VideoCapture(0)
                 time.sleep(1)
 
@@ -67,7 +74,8 @@ def hardware_loop():
                 is_recording = False
                 system_state = "ARMED (Waiting for RFID)"
                 
-                rfid_stop_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Capture the exact time the RFID was tapped to STOP the session
+                session_end_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 if cap is not None:
                     cap.release()
@@ -76,7 +84,13 @@ def hardware_loop():
                 
                 if current_attendees:
                     df = pd.DataFrame(list(current_attendees.items()), columns=["Student Name", "Face Scan Time"])
-                    df['Session Ended (RFID Tap)'] = rfid_stop_time
+                    
+                    # Insert Start Time as the very first column (Index 0)
+                    df.insert(0, 'Session Started (RFID Tap)', session_start_time)
+                    
+                    # Add End Time as the very last column
+                    df['Session Ended (RFID Tap)'] = session_end_time
+                    
                     df.to_excel("attendance_report.xlsx", index=False)
 
         if is_recording and cap is not None:
@@ -103,38 +117,28 @@ def hardware_loop():
                     center_y = (top + bottom) // 2
                     radius = int(max(right - left, bottom - top) / 1.5) 
 
-                    # ---------------------------------------------------------
-                    # NEW COLOR & TEXT LOGIC (OpenCV uses BGR, not RGB)
-                    # ---------------------------------------------------------
-                    color = (0, 0, 255) # Default to RED
+                    color = (0, 0, 255) # RED
                     status_text = ""
                     
                     if name != "Unknown":
-                        # Increment the frame counter for this specific person
                         face_match_counts[name] = face_match_counts.get(name, 0) + 1
                         
                         if face_match_counts[name] < 4:
-                            color = (0, 0, 255) # RED (Scanning)
+                            color = (0, 0, 255) # RED
                             
                         elif face_match_counts[name] < 30: 
-                            # GREEN state (Happens for about ~1.5 to 2 seconds)
                             if name not in current_attendees:
                                 current_attendees[name] = datetime.datetime.now().strftime("%H:%M:%S")
                             color = (0, 255, 0) # GREEN
                             status_text = "Success!"
                             
                         else:
-                            # YELLOW state (If they are still there after 2 secs, or come back later)
-                            color = (0, 255, 255) # YELLOW in BGR
+                            color = (0, 255, 255) # YELLOW
                             status_text = "Already marked attendance"
                     
-                    # Draw the Circle
                     cv2.circle(frame, (center_x, center_y), radius, color, 3)
-                    
-                    # Draw the Name Tag right above the circle
                     cv2.putText(frame, name, (center_x - radius, top - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
                     
-                    # Draw the Subtext (Success or Already Marked) below the circle
                     if status_text:
                         cv2.putText(frame, status_text, (center_x - radius, bottom + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
