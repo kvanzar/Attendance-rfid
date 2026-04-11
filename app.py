@@ -13,7 +13,7 @@ app = Flask(__name__)
 
 # Global variables
 system_state = "ARMED (Waiting for RFID)"
-current_attendees = {}  # CHANGED: Now a dictionary to store {Name: Timestamp}
+current_attendees = {}  
 latest_frame = None
 is_recording = False
 face_match_counts = {}
@@ -67,7 +67,6 @@ def hardware_loop():
                 is_recording = False
                 system_state = "ARMED (Waiting for RFID)"
                 
-                # Capture the exact time the RFID was tapped to close the session
                 rfid_stop_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 if cap is not None:
@@ -75,14 +74,9 @@ def hardware_loop():
                     cap = None
                     latest_frame = None
                 
-                # Save data to Excel
                 if current_attendees:
-                    # Convert our dictionary to a DataFrame
                     df = pd.DataFrame(list(current_attendees.items()), columns=["Student Name", "Face Scan Time"])
-                    
-                    # Add the overall session end timestamp
                     df['Session Ended (RFID Tap)'] = rfid_stop_time
-                    
                     df.to_excel("attendance_report.xlsx", index=False)
 
         if is_recording and cap is not None:
@@ -109,20 +103,40 @@ def hardware_loop():
                     center_y = (top + bottom) // 2
                     radius = int(max(right - left, bottom - top) / 1.5) 
 
-                    color = (0, 0, 255) # RED
+                    # ---------------------------------------------------------
+                    # NEW COLOR & TEXT LOGIC (OpenCV uses BGR, not RGB)
+                    # ---------------------------------------------------------
+                    color = (0, 0, 255) # Default to RED
+                    status_text = ""
                     
                     if name != "Unknown":
-                        if name in current_attendees:
-                            color = (0, 255, 0) # GREEN
-                        else:
-                            face_match_counts[name] = face_match_counts.get(name, 0) + 1
-                            if face_match_counts[name] >= 4:
-                                # ADD TO DICT WITH CURRENT TIMESTAMP
+                        # Increment the frame counter for this specific person
+                        face_match_counts[name] = face_match_counts.get(name, 0) + 1
+                        
+                        if face_match_counts[name] < 4:
+                            color = (0, 0, 255) # RED (Scanning)
+                            
+                        elif face_match_counts[name] < 30: 
+                            # GREEN state (Happens for about ~1.5 to 2 seconds)
+                            if name not in current_attendees:
                                 current_attendees[name] = datetime.datetime.now().strftime("%H:%M:%S")
-                                color = (0, 255, 0) # GREEN
+                            color = (0, 255, 0) # GREEN
+                            status_text = "Success!"
+                            
+                        else:
+                            # YELLOW state (If they are still there after 2 secs, or come back later)
+                            color = (0, 255, 255) # YELLOW in BGR
+                            status_text = "Already marked attendance"
                     
+                    # Draw the Circle
                     cv2.circle(frame, (center_x, center_y), radius, color, 3)
+                    
+                    # Draw the Name Tag right above the circle
                     cv2.putText(frame, name, (center_x - radius, top - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                    
+                    # Draw the Subtext (Success or Already Marked) below the circle
+                    if status_text:
+                        cv2.putText(frame, status_text, (center_x - radius, bottom + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                 
                 latest_frame = frame
 
@@ -152,7 +166,6 @@ def status():
     return jsonify({
         "state": system_state,
         "is_recording": is_recording,
-        # Extract just the names (keys) for the frontend list
         "attendees": list(current_attendees.keys()), 
         "file_ready": os.path.exists("attendance_report.xlsx")
     })
