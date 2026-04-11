@@ -11,12 +11,12 @@ import time
 
 app = Flask(__name__)
 
-# Global variables to share data between the hardware thread and the web server
+# Global variables
 system_state = "ARMED (Waiting for RFID)"
-current_attendees = set()
+current_attendees = {}  # CHANGED: Now a dictionary to store {Name: Timestamp}
 latest_frame = None
 is_recording = False
-face_match_counts = {} # NEW: Tracks how long a face has been looked at
+face_match_counts = {}
 
 def load_known_faces(folder_path="known_faces"):
     known_encodings, known_names = [], []
@@ -36,7 +36,6 @@ def load_known_faces(folder_path="known_faces"):
                 known_names.append(name)
     return known_encodings, known_names
 
-# Background thread for hardware and AI processing
 def hardware_loop():
     global system_state, current_attendees, latest_frame, is_recording, face_match_counts
     
@@ -60,28 +59,35 @@ def hardware_loop():
                 is_recording = True
                 system_state = "RECORDING (Session Active)"
                 current_attendees.clear()
-                face_match_counts.clear() # Reset the scan timers
-                cap = cv2.VideoCapture(0) # Open Mac Webcam
+                face_match_counts.clear()
+                cap = cv2.VideoCapture(0)
                 time.sleep(1)
 
             elif line == "STOP":
                 is_recording = False
                 system_state = "ARMED (Waiting for RFID)"
+                
+                # Capture the exact time the RFID was tapped to close the session
+                rfid_stop_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
                 if cap is not None:
                     cap.release()
                     cap = None
-                    latest_frame = None # Clear frame
+                    latest_frame = None
                 
                 # Save data to Excel
                 if current_attendees:
-                    df = pd.DataFrame(list(current_attendees), columns=["Student Name"])
-                    df['Timestamp'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    # Convert our dictionary to a DataFrame
+                    df = pd.DataFrame(list(current_attendees.items()), columns=["Student Name", "Face Scan Time"])
+                    
+                    # Add the overall session end timestamp
+                    df['Session Ended (RFID Tap)'] = rfid_stop_time
+                    
                     df.to_excel("attendance_report.xlsx", index=False)
 
         if is_recording and cap is not None:
             ret, frame = cap.read()
             if ret:
-                # Resize and process face recognition
                 small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
                 rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                 
@@ -98,34 +104,24 @@ def hardware_loop():
                         if matches[best_match_index]:
                             name = known_names[best_match_index]
 
-                    # Scale coordinates back up
                     top *= 4; right *= 4; bottom *= 4; left *= 4
-                    
-                    # Calculate center and radius for the circle
                     center_x = (left + right) // 2
                     center_y = (top + bottom) // 2
-                    # Make the circle slightly larger than the face boundaries
                     radius = int(max(right - left, bottom - top) / 1.5) 
 
-                    # Logic for Red/Green UI
-                    color = (0, 0, 255) # Default to RED
+                    color = (0, 0, 255) # RED
                     
                     if name != "Unknown":
                         if name in current_attendees:
-                            color = (0, 255, 0) # GREEN if already marked
+                            color = (0, 255, 0) # GREEN
                         else:
-                            # Increment how many frames we've seen this face
                             face_match_counts[name] = face_match_counts.get(name, 0) + 1
-                            
-                            # Require seeing the face for 4 frames before turning green
                             if face_match_counts[name] >= 4:
-                                current_attendees.add(name)
-                                color = (0, 255, 0) # Turn GREEN
+                                # ADD TO DICT WITH CURRENT TIMESTAMP
+                                current_attendees[name] = datetime.datetime.now().strftime("%H:%M:%S")
+                                color = (0, 255, 0) # GREEN
                     
-                    # Draw the Circle
                     cv2.circle(frame, (center_x, center_y), radius, color, 3)
-                    
-                    # Draw the Name Tag right above the circle
                     cv2.putText(frame, name, (center_x - radius, top - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
                 
                 latest_frame = frame
@@ -156,7 +152,8 @@ def status():
     return jsonify({
         "state": system_state,
         "is_recording": is_recording,
-        "attendees": list(current_attendees),
+        # Extract just the names (keys) for the frontend list
+        "attendees": list(current_attendees.keys()), 
         "file_ready": os.path.exists("attendance_report.xlsx")
     })
 
