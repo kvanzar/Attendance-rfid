@@ -1,5 +1,70 @@
-🛡️ Shield Attendance: AI + RFID Secure Logging SystemAn end-to-end, hardware-integrated secure attendance system. This project uses an ESP32 and RC522 RFID module to trigger a local web application running on an Apple Silicon (M4) Mac. The Python backend streams live video via Flask, performs real-time facial recognition, and logs timestamped attendance data to an Excel report.✨ FeaturesHardware Triggered: Session starts and ends via a physical RFID tap.Real-Time Face Recognition: Uses the face_recognition library (dlib) for fast, highly accurate face matching without needing to manually train a model.Smart UI Feedback: Live video feed with dynamic status rings:🔴 Red: Scanning for a face.🟢 Green: Face matched & attendance marked!🟡 Yellow: Duplicate scan prevention (Already marked).Automated Reporting: Generates a downloadable .xlsx file detailing the session start time, individual face scan times, and session end time.Modern Dashboard: Clean, responsive web UI built with Flask and Tailwind CSS.🛠️ Hardware SetupComponents NeededESP32 Development BoardRC522 RFID ReaderJumper WiresWiring DiagramConnect your RC522 module to the ESP32 using the following pins:RC522 PinESP32 PinSDA (SS)D5SCKD18MOSID23MISOD19IRQNot connectedGNDGNDRSTD223.3V3.3V💻 Software Installation1. ESP32 (Arduino IDE)Open the Arduino IDE and install the ESP32 board manager (by Espressif).Go to Sketch > Include Library > Manage Libraries and install MFRC522 by GithubCommunity.Upload the esp32_rfid.ino code to your board.Note: Ensure you close the Arduino Serial Monitor after uploading so Python can access the port!2. Mac/PC Backend (Python)Ensure you have Python 3 installed. If you are on an Apple Silicon Mac, install CMake first (brew install cmake) before installing the Python packages.Open your terminal and install the required dependencies:Bashpip install Flask opencv-python pandas pyserial face_recognition openpyxl "numpy<2"
-(Note: We enforce numpy<2 to ensure compatibility with dlib and pandas compiled for older NumPy architectures).📁 Project StructureEnsure your project directory looks exactly like this before running:PlaintextShield_Attendance/
+# Shield Attendance: AI + RFID Secure Logging System
+
+An end-to-end, hardware-integrated secure attendance system. This project uses an ESP32 and RC522 RFID module to trigger a local web application running on an Apple Silicon (M4) Mac. The Python backend streams live video via Flask, performs real-time facial recognition, and logs timestamped attendance data to an Excel report.
+
+## Features
+
+* **Hardware Triggered:** Session starts and ends via a physical RFID tap.
+* **Real-Time Face Recognition:** Uses the `face_recognition` library (dlib) for fast, highly accurate face matching without needing to manually train a model.
+* **Smart UI Feedback:** Live video feed with dynamic status rings:
+    * 🔴 **Red:** Scanning for a face.
+    * 🟢 **Green:** Face matched & attendance marked!
+    * 🟡 **Yellow:** Duplicate scan prevention (Already marked).
+* **Automated Reporting:** Generates a downloadable `.xlsx` file detailing the session start time, individual face scan times, and session end time.
+* **Modern Dashboard:** Clean, responsive web UI built with Flask and Tailwind CSS.
+
+---
+
+## Hardware Setup
+
+### Components Needed
+
+* ESP32 Development Board
+* RC522 RFID Reader
+* Jumper Wires
+
+### Wiring Diagram
+
+Connect your RC522 module to the ESP32 using the following pins:
+
+| RC522 Pin | ESP32 Pin       |
+| :-------- | :-------------- |
+| SDA (SS)  | D5              |
+| SCK       | D18             |
+| MOSI      | D23             |
+| MISO      | D19             |
+| IRQ       | *Not connected* |
+| GND       | GND             |
+| RST       | D22             |
+| 3.3V      | 3.3V            |
+
+---
+
+## Software Installation
+
+### ESP32 (Arduino IDE)
+
+* Open the Arduino IDE and install the **ESP32** board manager (by Espressif).
+* Go to **Sketch > Include Library > Manage Libraries** and install **MFRC522** by GithubCommunity.
+* Upload the `esp32_rfid.ino` code to your board.
+* Ensure you close the Arduino Serial Monitor after uploading so Python can access the port.
+
+### Mac/PC Backend (Python)
+
+* Ensure you have Python 3 installed. If you are on an Apple Silicon Mac, install CMake first (`brew install cmake`) before installing the Python packages.
+* Open your terminal and install the required dependencies:
+    ```bash
+    pip install Flask opencv-python pandas pyserial face_recognition openpyxl "numpy<2"
+    ```
+
+---
+
+## Project Structure
+
+Ensure your project directory looks exactly like this before running:
+
+```text
+Shield_Attendance/
 │
 ├── app.py                # Main Flask & hardware logic script
 ├── esp32_rfid.ino        # Code for the ESP32 microcontroller
@@ -9,6 +74,3 @@
 │
 └── templates/            # 📁 Required for Flask frontend
     └── index.html        # The Tailwind CSS frontend UI
-🚀 How to Run the SystemAdd Faces: Drop clear .jpg or .png photos of your students into the known_faces/ folder. Name the file with the student's name (e.g., John_Doe.jpg).Connect Hardware: Plug your ESP32 into your computer via USB. Check your serial port (e.g., /dev/cu.usbserial-0001) and update the MAC_SERIAL_PORT variable in app.py if necessary.Start the Server: Open your terminal in the project folder and run:Bashpython app.py
-Open the Dashboard: Open your web browser and navigate to:Plaintexthttp://localhost:5001
-Take Attendance:Tap an RFID card to start the camera and open the session.Have students look at the camera to log their attendance.Tap the RFID card again to close the session and generate the Excel log.Click Download Excel Log on the web dashboard!⚠️ TroubleshootingResource Busy / Access Denied Error: Make sure the Arduino IDE Serial Monitor is completely closed. Only one program can listen to the USB port at a time.Port 5000 in Use (macOS): Apple's AirPlay Receiver uses port 5000. This app defaults to 5001 to avoid this conflict. If you need to change it, alter the app.run(port=5001) line at the bottom of app.py.No Faces Detected: Ensure the images in known_faces/ are well-lit and contain only one visible face.
