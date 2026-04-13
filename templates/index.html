@@ -66,7 +66,6 @@
             </div>
         </div>
     </div>
-
     <script>
         const statusText = document.getElementById('status-text');
         const dotIndicator = document.getElementById('dot-indicator');
@@ -77,64 +76,66 @@
         const downloadBtn = document.getElementById('download-btn');
         const downloadHint = document.getElementById('download-hint');
 
-        // Poll the server every 1 second to update the UI
         setInterval(async () => {
             try {
                 const response = await fetch('/api/status');
                 const data = await response.json();
 
-                // Update Status Text
                 statusText.innerText = data.state;
 
-                // Handle UI colors based on state
+                // Download Button Logic
+                if (data.file_ready && data.state === "Session Ended") {
+                    downloadBtn.classList.remove('pointer-events-none', 'opacity-50');
+                    downloadBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                    downloadHint.innerText = "Ready for download!";
+                }
+
+                // Camera UI Logic
                 if (data.is_recording) {
                     dotIndicator.className = "relative inline-flex rounded-full h-3 w-3 bg-red-500";
                     pingIndicator.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75";
 
-                    // Show video, hide idle text
-                    videoStream.src = "/video_feed?" + new Date().getTime(); // Prevent caching
+                    videoStream.src = "/video_feed?" + new Date().getTime();
                     videoStream.classList.remove('hidden');
                     idleState.classList.add('hidden');
                 } else {
                     dotIndicator.className = "relative inline-flex rounded-full h-3 w-3 bg-blue-500";
                     pingIndicator.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75";
 
-                    // Hide video, show idle text
                     videoStream.src = "";
                     videoStream.classList.add('hidden');
                     idleState.classList.remove('hidden');
+
+                    if (data.state === "Session Ended") {
+                        idleState.innerHTML = '<p class="text-green-500 font-bold text-xl">Class Ended</p><p class="text-sm text-gray-400 mt-2">Download attendance report below.</p>';
+                    } else if (data.state.includes("RFID ON")) {
+                        idleState.innerHTML = '<p class="text-yellow-500 font-bold text-lg">Camera Disabled</p><p class="text-sm text-gray-400 mt-2">RFID Scanner remains active for breaks.</p>';
+                    }
                 }
 
-                // Update Attendees List
+                // Beautiful Green/Yellow List Rendering
                 if (data.attendees.length > 0) {
-                    attendeeList.innerHTML = data.attendees.map(name =>
-                        `<li class="flex items-center space-x-2">
-                            <span class="h-2 w-2 bg-green-400 rounded-full"></span>
-                            <span class="text-gray-700 font-medium">${name}</span>
-                        </li>`
-                    ).join('');
-                } else if (data.is_recording) {
-                    attendeeList.innerHTML = `<li class="text-gray-400 text-sm italic">Scanning...</li>`;
-                } else {
-                    attendeeList.innerHTML = `<li class="text-gray-400 text-sm italic">Waiting for session...</li>`;
-                }
+                    attendeeList.innerHTML = data.attendees.map(student => {
+                        // Dynamically apply Tailwind colors based on IN/OUT status
+                        let colorClass = student.status === "IN" ? "bg-green-500" : "bg-yellow-400";
+                        let textClass = student.status === "IN" ? "text-gray-800" : "text-yellow-600";
+                        let bgClass = student.status === "IN" ? "bg-white border-gray-100" : "bg-yellow-50 border-yellow-100";
 
-                // Handle Download Button
-                if (data.file_ready && !data.is_recording) {
-                    downloadBtn.classList.remove('pointer-events-none', 'opacity-50');
-                    downloadHint.innerText = "Latest report ready to download.";
-                    downloadHint.classList.replace('text-gray-400', 'text-green-600');
+                        return `
+                        <li class="flex items-center justify-between p-3 rounded-xl border shadow-sm transition-all duration-300 ${bgClass}">
+                            <div class="flex items-center space-x-3">
+                                <span class="h-3 w-3 ${colorClass} rounded-full shadow-sm"></span>
+                                <span class="${textClass} font-semibold">${student.name}</span>
+                            </div>
+                            <span class="text-xs font-bold uppercase tracking-wider ${textClass}">${student.msg}</span>
+                        </li>`;
+                    }).join('');
                 } else {
-                    downloadBtn.classList.add('pointer-events-none', 'opacity-50');
-                    downloadHint.innerText = data.is_recording ? "Session in progress..." : "Available after session ends.";
-                    downloadHint.classList.replace('text-green-600', 'text-gray-400');
+                    attendeeList.innerHTML = '<li class="text-gray-400 text-sm italic">Waiting for students...</li>';
                 }
 
             } catch (error) {
-                console.error("Connection lost", error);
-                statusText.innerText = "Disconnected";
-                dotIndicator.className = "relative inline-flex rounded-full h-3 w-3 bg-gray-500";
-                pingIndicator.classList.add('hidden');
+                console.error('Error fetching status:', error);
             }
         }, 1000);
     </script>
