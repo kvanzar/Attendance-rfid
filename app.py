@@ -8,19 +8,34 @@ import os
 import numpy as np
 import datetime
 import time
+import math
 
 app = Flask(__name__)
 
-# --- System State Variables ---
-system_mode = "WAITING" # WAITING, CAMERA_ON, RFID_ONLY, ENDED
+# --- Configuration ---
+MIN_SECONDS_REQUIRED = 60 
+BLINK_THRESHOLD = 0.22  # If the EAR drops below this, the eyes are closed
+
+# --- Global State ---
+system_mode = "WAITING" 
 latest_frame = None
 class_start_time = None
 class_end_time = None
 
-# Tracks: { UID: {"name": str, "status": "IN", "punch_in": datetime, "last_in": datetime, "total_sec": float} }
 student_records = {} 
 rfid_to_name_map = {} 
-name_to_rfid_map = {} # Reverse lookup for face scanning
+name_to_rfid_map = {} 
+
+def euclidean_dist(ptA, ptB):
+    return math.sqrt((ptA[0] - ptB[0])**2 + (ptA[1] - ptB[1])**2)
+
+def eye_aspect_ratio(eye):
+    # eye is a list of 6 (x, y) coordinates mapping the eye outline
+    A = euclidean_dist(eye[1], eye[5])
+    B = euclidean_dist(eye[2], eye[4])
+    C = euclidean_dist(eye[0], eye[3])
+    # Compute the eye aspect ratio
+    return (A + B) / (2.0 * C)
 
 def load_known_faces(folder_path="known_faces"):
     known_encodings, known_names = [], []
@@ -51,11 +66,9 @@ def load_known_faces(folder_path="known_faces"):
 
 def export_final_excel():
     global class_start_time, class_end_time
-    
     now = datetime.datetime.now()
     df_list = []
     
-    # 1. ROW ONE: Master Start
     start_str = class_start_time.strftime("%Y-%m-%d %H:%M:%S") if class_start_time else "Unknown"
     df_list.append({
         "Student Name": ">>> MASTER START <<<",
@@ -65,23 +78,23 @@ def export_final_excel():
         "Final Status": ""
     })
     
-    # 2. MIDDLE ROWS: Student Data
     for uid, data in student_records.items():
-        eff_time = data["total_sec"]
-        if data["status"] == "IN":
-            eff_time += (now - data["last_in"]).total_seconds()
+        # Only export students who actually blinked and fully clocked in
+        if data["status"] != "PENDING_BLINK":
+            eff_time = data["total_sec"]
+            if data["status"] == "IN":
+                eff_time += (now - data["last_in"]).total_seconds()
+                
+            mins, secs = divmod(int(eff_time), 60)
             
-        mins, secs = divmod(int(eff_time), 60)
+            df_list.append({
+                "Student Name": data["name"],
+                "Initial Punch In": data["punch_in"].strftime("%H:%M:%S"),
+                "Total Time in Class": f"{mins}m {secs}s",
+                "RFID Number": uid,
+                "Final Status": data["status"]
+            })
         
-        df_list.append({
-            "Student Name": data["name"],
-            "Initial Punch In": data["punch_in"].strftime("%H:%M:%S"),
-            "Total Time in Class": f"{mins}m {secs}s",
-            "RFID Number": uid,
-            "Final Status": data["status"]
-        })
-        
-    # 3. LAST ROW: Master End
     end_str = class_end_time.strftime("%Y-%m-%d %H:%M:%S") if class_end_time else now.strftime("%Y-%m-%d %H:%M:%S")
     df_list.append({
         "Student Name": ">>> CLASS ENDED <<<",
@@ -99,7 +112,7 @@ def hardware_loop():
     global system_mode, student_records, latest_frame, class_start_time, class_end_time
     
     known_encodings, known_names = load_known_faces()
-    MAC_SERIAL_PORT = '/dev/cu.usbserial-0001' # Update if needed
+    MAC_SERIAL_PORT = '/dev/cu.usbserial-0001' 
     
     try:
         ser = serial.Serial(MAC_SERIAL_PORT, 115200, timeout=1)
@@ -113,11 +126,9 @@ def hardware_loop():
         # --- 1. HANDLE RFID SIGNALS ---
         if ser.in_waiting > 0:
             line = ser.readline().decode('utf-8').strip()
-            print(f"📥 Signal: {line}")
             
             if line == "MASTER_TAP":
                 if system_mode == "WAITING":
-                    print("Class Started! Camera ON.")
                     class_start_time = datetime.datetime.now()
                     system_mode = "CAMERA_ON"
                     student_records.clear()
@@ -125,7 +136,6 @@ def hardware_loop():
                     time.sleep(1)
                     
                 elif system_mode == "CAMERA_ON":
-                    print("Camera Stopped. RFID continuing seamlessly.")
                     system_mode = "RFID_ONLY"
                     if cap is not None:
                         cap.release()
@@ -134,7 +144,6 @@ def hardware_loop():
 
             elif line == "MASTER_HOLD":
                 if system_mode in ["CAMERA_ON", "RFID_ONLY"]:
-                    print("Class Ended by Master Hold > 3s.")
                     class_end_time = datetime.datetime.now()
                     system_mode = "ENDED"
                     if cap is not None:
@@ -144,35 +153,29 @@ def hardware_loop():
                     export_final_excel()
 
             elif line.startswith("STUDENT_TAP:"):
-                # Ignore taps if class hasn't started or has ended
                 if system_mode in ["CAMERA_ON", "RFID_ONLY"]:
                     uid = line.split(":")[1].strip()
                     
                     if uid in rfid_to_name_map:
                         name = rfid_to_name_map[uid]
                         
-                        # Student must have punched in via face first!
-                        if uid in student_records:
+                        if uid in student_records and student_records[uid]["status"] != "PENDING_BLINK":
                             rec = student_records[uid]
                             now = datetime.datetime.now()
                             
                             if rec["status"] == "IN":
-                                # Clock OUT
                                 spent = (now - rec["last_in"]).total_seconds()
                                 rec["total_sec"] += spent
                                 rec["status"] = "OUT"
                                 print(f"{name} Clocked OUT.")
                             else:
-                                # Clock IN
                                 rec["last_in"] = now
                                 rec["status"] = "IN"
                                 print(f"{name} Clocked IN.")
                         else:
-                            print(f"❌ {name} must punch in with Face Scan first!")
-                    else:
-                        print("❌ Unregistered RFID Card.")
+                            print(f"❌ {name} must punch in with Face Scan AND BLINK first!")
 
-        # --- 2. HANDLE FACE RECOGNITION (Only if Camera is ON) ---
+        # --- 2. HANDLE FACE RECOGNITION + ANTI-SPOOFING ---
         if system_mode == "CAMERA_ON" and cap is not None:
             ret, frame = cap.read()
             if ret:
@@ -181,8 +184,11 @@ def hardware_loop():
                 
                 face_locations = face_recognition.face_locations(rgb_small_frame)
                 face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+                
+                # EXTRACT LANDMARKS FOR BLINK DETECTION
+                face_landmarks_list = face_recognition.face_landmarks(rgb_small_frame, face_locations)
 
-                for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+                for (top, right, bottom, left), face_encoding, landmarks in zip(face_locations, face_encodings, face_landmarks_list):
                     matches = face_recognition.compare_faces(known_encodings, face_encoding, tolerance=0.5)
                     name = "Unknown"
                     face_distances = face_recognition.face_distance(known_encodings, face_encoding)
@@ -204,23 +210,45 @@ def hardware_loop():
                         
                         if uid:
                             now = datetime.datetime.now()
-                            # Initial Face Punch-In Registration
+                            
+                            # Initialize student in a "PENDING_BLINK" state
                             if uid not in student_records:
                                 student_records[uid] = {
                                     "name": name,
-                                    "status": "IN",
-                                    "punch_in": now,
-                                    "last_in": now,
+                                    "status": "PENDING_BLINK",
+                                    "punch_in": None,
+                                    "last_in": None,
                                     "total_sec": 0
                                 }
-                                print(f"✅ {name} initially punched in via Face!")
                             
                             rec = student_records[uid]
-                            if rec["status"] == "IN":
-                                color = (0, 255, 0) # Green
-                            else:
-                                color = (0, 255, 255) # Yellow
+                            
+                            # If they haven't verified liveness yet, check their eyes
+                            if rec["status"] == "PENDING_BLINK":
+                                left_eye = landmarks['left_eye']
+                                right_eye = landmarks['right_eye']
                                 
+                                left_ear = eye_aspect_ratio(left_eye)
+                                right_ear = eye_aspect_ratio(right_eye)
+                                average_ear = (left_ear + right_ear) / 2.0
+                                
+                                color = (255, 165, 0) # Orange: Prompting to blink
+                                
+                                # Detect Blink
+                                if average_ear < BLINK_THRESHOLD:
+                                    # Liveness verified! Clock them in.
+                                    rec["status"] = "IN"
+                                    rec["punch_in"] = now
+                                    rec["last_in"] = now
+                                    print(f"✅ Liveness Confirmed: {name} punched in!")
+                                    
+                            else:
+                                # They are fully verified and clocked in
+                                if rec["status"] == "IN":
+                                    color = (0, 255, 0) # Green
+                                else:
+                                    color = (0, 255, 255) # Yellow
+                                    
                     cv2.circle(frame, (center_x, center_y), radius, color, 3)
                     cv2.putText(frame, name, (center_x - radius, top - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
                 
@@ -248,15 +276,16 @@ def video_feed():
 
 @app.route('/api/status')
 def status():
-    # Package attendees with their specific UI colors and messages
     attendees_ui = []
     for uid, data in student_records.items():
-        if data["status"] == "IN":
+        if data["status"] == "PENDING_BLINK":
+            # Do not show them in the sidebar until they blink
+            continue 
+        elif data["status"] == "IN":
             attendees_ui.append({"name": data["name"], "status": "IN", "msg": "Clocked In"})
         else:
             attendees_ui.append({"name": data["name"], "status": "OUT", "msg": "Clocked Out (Break)"})
             
-    # Determine Header Text based on mode
     ui_state = "Waiting for Teacher"
     if system_mode == "CAMERA_ON": ui_state = "Class Active (Camera ON)"
     if system_mode == "RFID_ONLY": ui_state = "Class Active (Camera OFF, RFID ON)"
